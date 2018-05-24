@@ -54,8 +54,16 @@ CALL SPLIT_COMMAND_EXECUTABLE();
 
 DROP ALIAS IF EXISTS SPLIT_COMMAND_EXECUTABLE;
 
+ALTER TABLE `applications`
+  ADD COLUMN `requested_id` BOOLEAN NOT NULL DEFAULT FALSE;
+
+ALTER TABLE `clusters`
+  ADD COLUMN `requested_id` BOOLEAN NOT NULL DEFAULT FALSE;
+
 ALTER TABLE `commands`
   DROP COLUMN `executable`;
+ALTER TABLE `commands`
+  ADD COLUMN `requested_id` BOOLEAN NOT NULL DEFAULT FALSE;
 
 ALTER TABLE `criteria`
   ADD COLUMN `unique_id` VARCHAR(255) DEFAULT NULL;
@@ -98,3 +106,40 @@ ALTER TABLE `jobs`
   ADD COLUMN `requested_agent_config_ext` TEXT DEFAULT NULL;
 ALTER TABLE `jobs`
   ADD COLUMN `requested_agent_environment_ext` TEXT DEFAULT NULL;
+ALTER TABLE `jobs`
+  ALTER COLUMN `disable_log_archival` RENAME TO `archiving_disabled`;
+ALTER TABLE `jobs`
+  ALTER COLUMN `cpu_requested` RENAME TO `requested_cpu`;
+ALTER TABLE `jobs`
+  ALTER COLUMN `memory_requested` RENAME TO `requested_memory`;
+ALTER TABLE `jobs`
+  ALTER COLUMN `timeout_requested` RENAME TO `requested_timeout`;
+ALTER TABLE `jobs`
+  ALTER COLUMN `host_name` RENAME TO `agent_hostname`;
+ALTER TABLE `jobs`
+  ALTER COLUMN `agent_hostname` SET NULL;
+ALTER TABLE `jobs`
+  ALTER COLUMN `agent_hostname` SET DEFAULT NULL;
+ALTER TABLE `jobs`
+  ALTER COLUMN `client_host` RENAME TO `request_api_client_hostname`;
+ALTER TABLE `jobs`
+  ALTER COLUMN `user_agent` RENAME TO `request_api_client_user_agent`;
+ALTER TABLE `jobs`
+  ADD COLUMN `request_agent_client_hostname` VARCHAR(255) DEFAULT NULL;
+ALTER TABLE `jobs`
+  ADD COLUMN `request_agent_client_version` VARCHAR(255) DEFAULT NULL;
+ALTER TABLE `jobs`
+  ADD COLUMN `request_agent_client_pid` INT(11) DEFAULT NULL;
+ALTER TABLE `jobs`
+  ALTER COLUMN `status` SET DEFAULT 'RESERVED';
+ALTER TABLE `jobs`
+  ADD COLUMN `requested_id` BOOLEAN NOT NULL DEFAULT FALSE;
+
+ALTER TABLE `job_applications_requested`
+  RENAME TO `job_requested_applications`;
+ALTER TABLE `job_requested_applications`
+  RENAME CONSTRAINT `JOB_APPLICATIONS_REQUESTED_JOB_ID_FK` TO `JOB_REQUESTED_APPLICATIONS_JOB_ID_FK`;
+ALTER INDEX `JOB_APPLICATIONS_REQUESTED_APPLICATION_ID_INDEX`
+  RENAME TO `JOB_REQUESTED_APPLICATIONS_APPLICATION_ID_INDEX`;
+ALTER INDEX `JOB_APPLICATIONS_REQUESTED_JOB_ID_INDEX`
+  RENAME TO `JOB_REQUESTED_APPLICATIONS_JOB_ID_INDEX`;

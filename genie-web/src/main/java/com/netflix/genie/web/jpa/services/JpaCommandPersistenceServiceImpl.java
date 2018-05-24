@@ -24,18 +24,18 @@ import com.google.common.collect.Lists;
 import com.google.common.collect.Sets;
 import com.netflix.genie.common.dto.ClusterStatus;
 import com.netflix.genie.common.dto.CommandStatus;
-import com.netflix.genie.common.internal.dto.v4.Application;
-import com.netflix.genie.common.internal.dto.v4.Cluster;
-import com.netflix.genie.common.internal.dto.v4.Command;
-import com.netflix.genie.common.internal.dto.v4.CommandMetadata;
-import com.netflix.genie.common.internal.dto.v4.CommandRequest;
-import com.netflix.genie.common.internal.dto.v4.ExecutionEnvironment;
 import com.netflix.genie.common.exceptions.GenieBadRequestException;
 import com.netflix.genie.common.exceptions.GenieConflictException;
 import com.netflix.genie.common.exceptions.GenieException;
 import com.netflix.genie.common.exceptions.GenieNotFoundException;
 import com.netflix.genie.common.exceptions.GeniePreconditionException;
 import com.netflix.genie.common.exceptions.GenieServerException;
+import com.netflix.genie.common.internal.dto.v4.Application;
+import com.netflix.genie.common.internal.dto.v4.Cluster;
+import com.netflix.genie.common.internal.dto.v4.Command;
+import com.netflix.genie.common.internal.dto.v4.CommandMetadata;
+import com.netflix.genie.common.internal.dto.v4.CommandRequest;
+import com.netflix.genie.common.internal.dto.v4.ExecutionEnvironment;
 import com.netflix.genie.common.util.GenieObjectMapper;
 import com.netflix.genie.web.jpa.entities.ApplicationEntity;
 import com.netflix.genie.web.jpa.entities.ClusterEntity;
@@ -50,9 +50,9 @@ import com.netflix.genie.web.jpa.repositories.JpaFileRepository;
 import com.netflix.genie.web.jpa.repositories.JpaTagRepository;
 import com.netflix.genie.web.jpa.specifications.JpaClusterSpecs;
 import com.netflix.genie.web.jpa.specifications.JpaCommandSpecs;
-import com.netflix.genie.web.services.CommandService;
-import com.netflix.genie.web.services.FileService;
-import com.netflix.genie.web.services.TagService;
+import com.netflix.genie.web.services.CommandPersistenceService;
+import com.netflix.genie.web.services.FilePersistenceService;
+import com.netflix.genie.web.services.TagPersistenceService;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.data.domain.Page;
@@ -70,11 +70,10 @@ import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Set;
-import java.util.UUID;
 import java.util.stream.Collectors;
 
 /**
- * Implementation of the CommandService interface.
+ * Implementation of the CommandPersistenceService interface.
  *
  * @author amsharma
  * @author tgianos
@@ -87,7 +86,7 @@ import java.util.stream.Collectors;
     }
 )
 @Slf4j
-public class JpaCommandServiceImpl extends JpaBaseService implements CommandService {
+public class JpaCommandPersistenceServiceImpl extends JpaBaseService implements CommandPersistenceService {
     private final JpaCommandRepository commandRepository;
     private final JpaApplicationRepository applicationRepository;
     private final JpaClusterRepository clusterRepo;
@@ -95,24 +94,24 @@ public class JpaCommandServiceImpl extends JpaBaseService implements CommandServ
     /**
      * Default constructor.
      *
-     * @param tagService            The tag service to use
-     * @param tagRepository         The tag repository to use
-     * @param fileService           The file service to use
-     * @param fileRepository        The file repository to use
-     * @param commandRepository     the command repository to use
-     * @param applicationRepository the application repository to use
-     * @param clusterRepository     the cluster repository to use
+     * @param tagPersistenceService  The tag service to use
+     * @param tagRepository          The tag repository to use
+     * @param filePersistenceService The file service to use
+     * @param fileRepository         The file repository to use
+     * @param commandRepository      the command repository to use
+     * @param applicationRepository  the application repository to use
+     * @param clusterRepository      the cluster repository to use
      */
-    public JpaCommandServiceImpl(
-        final TagService tagService,
+    public JpaCommandPersistenceServiceImpl(
+        final TagPersistenceService tagPersistenceService,
         final JpaTagRepository tagRepository,
-        final FileService fileService,
+        final FilePersistenceService filePersistenceService,
         final JpaFileRepository fileRepository,
         final JpaCommandRepository commandRepository,
         final JpaApplicationRepository applicationRepository,
         final JpaClusterRepository clusterRepository
     ) {
-        super(tagService, tagRepository, fileService, fileRepository);
+        super(tagPersistenceService, tagRepository, filePersistenceService, fileRepository);
         this.commandRepository = commandRepository;
         this.applicationRepository = applicationRepository;
         this.clusterRepo = clusterRepository;
@@ -561,7 +560,7 @@ public class JpaCommandServiceImpl extends JpaBaseService implements CommandServ
         final CommandMetadata metadata = request.getMetadata();
 
         final CommandEntity entity = new CommandEntity();
-        entity.setUniqueId(request.getRequestedId().orElse(UUID.randomUUID().toString()));
+        this.setUniqueId(entity, request.getRequestedId().orElse(null));
         entity.setCheckDelay(request.getCheckDelay().orElse(com.netflix.genie.common.dto.Command.DEFAULT_CHECK_DELAY));
         entity.setExecutable(request.getExecutable());
         request.getMemory().ifPresent(entity::setMemory);
@@ -598,7 +597,7 @@ public class JpaCommandServiceImpl extends JpaBaseService implements CommandServ
         entity.setVersion(metadata.getVersion());
         entity.setDescription(metadata.getDescription().orElse(null));
         entity.setStatus(metadata.getStatus());
-        EntityDtoConverters.setEntityMetadata(GenieObjectMapper.getMapper(), metadata, entity);
+        EntityDtoConverters.setJsonField(metadata.getMetadata().orElse(null), entity::setMetadata);
     }
 
     private void setEntityResources(

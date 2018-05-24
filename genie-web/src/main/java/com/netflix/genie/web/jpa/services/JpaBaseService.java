@@ -22,16 +22,19 @@ import com.netflix.genie.common.exceptions.GenieException;
 import com.netflix.genie.common.exceptions.GenieNotFoundException;
 import com.netflix.genie.web.jpa.entities.FileEntity;
 import com.netflix.genie.web.jpa.entities.TagEntity;
+import com.netflix.genie.web.jpa.entities.UniqueIdEntity;
 import com.netflix.genie.web.jpa.repositories.JpaFileRepository;
 import com.netflix.genie.web.jpa.repositories.JpaTagRepository;
-import com.netflix.genie.web.services.FileService;
-import com.netflix.genie.web.services.TagService;
+import com.netflix.genie.web.services.FilePersistenceService;
+import com.netflix.genie.web.services.TagPersistenceService;
 import lombok.AccessLevel;
 import lombok.Getter;
 import lombok.extern.slf4j.Slf4j;
 
+import javax.annotation.Nullable;
 import javax.validation.constraints.NotBlank;
 import java.util.Set;
+import java.util.UUID;
 
 /**
  * Base service for other services to extend for common functionality.
@@ -46,28 +49,28 @@ class JpaBaseService {
     private static final char COMMA = ',';
     private static final String EMPTY_STRING = "";
 
-    private final TagService tagService;
+    private final TagPersistenceService tagPersistenceService;
     private final JpaTagRepository tagRepository;
-    private final FileService fileService;
+    private final FilePersistenceService filePersistenceService;
     private final JpaFileRepository fileRepository;
 
     /**
      * Constructor.
      *
-     * @param tagService     The tag service to use
-     * @param tagRepository  The tag repository to use
-     * @param fileService    The file service to use
-     * @param fileRepository The file repository to use
+     * @param tagPersistenceService  The tag service to use
+     * @param tagRepository          The tag repository to use
+     * @param filePersistenceService The file service to use
+     * @param fileRepository         The file repository to use
      */
     JpaBaseService(
-        final TagService tagService,
+        final TagPersistenceService tagPersistenceService,
         final JpaTagRepository tagRepository,
-        final FileService fileService,
+        final FilePersistenceService filePersistenceService,
         final JpaFileRepository fileRepository
     ) {
-        this.tagService = tagService;
+        this.tagPersistenceService = tagPersistenceService;
         this.tagRepository = tagRepository;
-        this.fileService = fileService;
+        this.filePersistenceService = filePersistenceService;
         this.fileRepository = fileRepository;
     }
 
@@ -81,7 +84,7 @@ class JpaBaseService {
     FileEntity createAndGetFileEntity(
         @NotBlank(message = "File path cannot be blank") final String file
     ) throws GenieException {
-        this.fileService.createFileIfNotExists(file);
+        this.filePersistenceService.createFileIfNotExists(file);
         return this.fileRepository.findByFile(file).orElseThrow(
             () -> new GenieNotFoundException("Couldn't find file entity for file " + file)
         );
@@ -112,7 +115,7 @@ class JpaBaseService {
     TagEntity createAndGetTagEntity(
         @NotBlank(message = "Tag cannot be blank") final String tag
     ) throws GenieException {
-        this.tagService.createTagIfNotExists(tag);
+        this.tagPersistenceService.createTagIfNotExists(tag);
         return this.tagRepository.findByTag(tag).orElseThrow(
             () -> new GenieNotFoundException("Couldn't find tag entity for tag " + tag)
         );
@@ -131,5 +134,22 @@ class JpaBaseService {
             tagEntities.add(this.createAndGetTagEntity(tag));
         }
         return tagEntities;
+    }
+
+    /**
+     * Set the unique id and other related fields for an entity.
+     *
+     * @param entity      The entity to set the unique id for
+     * @param requestedId The id requested if there was one. Null if not.
+     * @param <E>         The entity type which must extend {@link UniqueIdEntity}
+     */
+    <E extends UniqueIdEntity> void setUniqueId(final E entity, @Nullable final String requestedId) {
+        if (requestedId != null) {
+            entity.setUniqueId(requestedId);
+            entity.setRequestedId(true);
+        } else {
+            entity.setUniqueId(UUID.randomUUID().toString());
+            entity.setRequestedId(false);
+        }
     }
 }

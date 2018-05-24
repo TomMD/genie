@@ -35,14 +35,15 @@ import com.netflix.genie.web.jpa.entities.CommandEntity;
 import com.netflix.genie.web.jpa.entities.FileEntity;
 import com.netflix.genie.web.jpa.entities.JobEntity;
 import com.netflix.genie.web.jpa.entities.TagEntity;
+import com.netflix.genie.web.jpa.entities.projections.v4.V4JobRequestProjection;
 import com.netflix.genie.web.jpa.repositories.JpaApplicationRepository;
 import com.netflix.genie.web.jpa.repositories.JpaClusterRepository;
 import com.netflix.genie.web.jpa.repositories.JpaCommandRepository;
 import com.netflix.genie.web.jpa.repositories.JpaFileRepository;
 import com.netflix.genie.web.jpa.repositories.JpaJobRepository;
 import com.netflix.genie.web.jpa.repositories.JpaTagRepository;
-import com.netflix.genie.web.services.FileService;
-import com.netflix.genie.web.services.TagService;
+import com.netflix.genie.web.services.FilePersistenceService;
+import com.netflix.genie.web.services.TagPersistenceService;
 import org.hamcrest.Matchers;
 import org.junit.Assert;
 import org.junit.Before;
@@ -97,9 +98,9 @@ public class JpaJobPersistenceServiceImplUnitTests {
         this.fileRepository = Mockito.mock(JpaFileRepository.class);
 
         this.jobPersistenceService = new JpaJobPersistenceServiceImpl(
-            Mockito.mock(TagService.class),
+            Mockito.mock(TagPersistenceService.class),
             this.tagRepository,
-            Mockito.mock(FileService.class),
+            Mockito.mock(FilePersistenceService.class),
             this.fileRepository,
             this.jobRepository,
             this.applicationRepository,
@@ -181,9 +182,9 @@ public class JpaJobPersistenceServiceImplUnitTests {
             Matchers.is(JOB_1_VERSION)
         );
         Assert.assertEquals(JOB_1_NAME, argument.getValue().getName());
-        final int actualCpu = argument.getValue().getCpuRequested().orElseThrow(IllegalArgumentException::new);
+        final int actualCpu = argument.getValue().getRequestedCpu().orElseThrow(IllegalArgumentException::new);
         Assert.assertThat(actualCpu, Matchers.is(cpu));
-        final int actualMemory = argument.getValue().getMemoryRequested().orElseThrow(IllegalArgumentException::new);
+        final int actualMemory = argument.getValue().getRequestedMemory().orElseThrow(IllegalArgumentException::new);
         Assert.assertThat(actualMemory, Matchers.is(mem));
         final String actualEmail = argument.getValue().getEmail().orElseThrow(IllegalArgumentException::new);
         Assert.assertThat(actualEmail, Matchers.is(email));
@@ -199,7 +200,7 @@ public class JpaJobPersistenceServiceImplUnitTests {
         final String actualDescription
             = argument.getValue().getDescription().orElseThrow(IllegalArgumentException::new);
         Assert.assertThat(actualDescription, Matchers.is(description));
-        Assert.assertThat(argument.getValue().getApplicationsRequested(), Matchers.empty());
+        Assert.assertThat(argument.getValue().getRequestedApplications(), Matchers.empty());
     }
 
     /**
@@ -575,5 +576,19 @@ public class JpaJobPersistenceServiceImplUnitTests {
         this.jobPersistenceService.setJobCompletionInformation(JOB_1_ID, 0, JobStatus.FAILED, "k", null, 100L);
         Mockito.verify(jobEntity, Mockito.times(1)).setStdErrSize(100L);
         Mockito.verify(jobEntity, Mockito.times(1)).setStdOutSize(null);
+    }
+
+    /**
+     * When a request is made for a job that doesn't have a record in the database a GenieNotFoundException is thrown.
+     *
+     * @throws GenieException When the job isn't found
+     */
+    @Test(expected = GenieNotFoundException.class)
+    public void noJobRequestFoundThrowsException() throws GenieException {
+        Mockito
+            .when(this.jobRepository.findByUniqueId(Mockito.anyString(), Mockito.eq(V4JobRequestProjection.class)))
+            .thenReturn(Optional.empty());
+
+        this.jobPersistenceService.getJobRequest(UUID.randomUUID().toString());
     }
 }

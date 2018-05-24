@@ -85,8 +85,15 @@ LANGUAGE plpgsql;
 SELECT genie_split_commands_330();
 DROP FUNCTION genie_split_commands_330();
 
+ALTER TABLE applications
+  ADD COLUMN requested_id BOOLEAN DEFAULT FALSE NOT NULL;
+
+ALTER TABLE clusters
+  ADD COLUMN requested_id BOOLEAN DEFAULT FALSE NOT NULL;
+
 ALTER TABLE commands
-  DROP COLUMN executable;
+  DROP COLUMN executable,
+  ADD COLUMN requested_id BOOLEAN DEFAULT FALSE NOT NULL;
 
 ALTER TABLE criteria
   ADD COLUMN unique_id VARCHAR(255) DEFAULT NULL,
@@ -118,8 +125,35 @@ CREATE TABLE job_environment_variables (
 CREATE INDEX job_environment_variables_job_id_index
   ON job_environment_variables (job_id);
 
+ALTER TABLE jobs RENAME COLUMN disable_log_archival TO archiving_disabled;
+ALTER TABLE jobs RENAME COLUMN cpu_requested        TO requested_cpu;
+ALTER TABLE jobs RENAME COLUMN memory_requested     TO requested_memory;
+ALTER TABLE jobs RENAME COLUMN timeout_requested    TO requested_timeout;
+ALTER TABLE jobs RENAME COLUMN host_name            TO agent_hostname;
+ALTER TABLE jobs RENAME COLUMN client_host          TO request_api_client_hostname;
+ALTER TABLE jobs RENAME COLUMN user_agent           TO request_api_client_user_agent;
+
 ALTER TABLE jobs
   ADD COLUMN interactive                      BOOLEAN       DEFAULT FALSE NOT NULL,
   ADD COLUMN requested_job_directory_location VARCHAR(1024) DEFAULT NULL,
   ADD COLUMN requested_agent_config_ext       TEXT          DEFAULT NULL,
-  ADD COLUMN requested_agent_environment_ext  TEXT          DEFAULT NULL;
+  ADD COLUMN requested_agent_environment_ext  TEXT          DEFAULT NULL,
+  ALTER COLUMN agent_hostname DROP NOT NULL,
+  ALTER COLUMN agent_hostname SET DEFAULT NULL,
+  ADD COLUMN request_agent_client_hostname    VARCHAR(255)  DEFAULT NULL,
+  ADD COLUMN request_agent_client_version     VARCHAR(255)  DEFAULT NULL,
+  ADD COLUMN request_agent_client_pid         INT           DEFAULT NULL,
+  ALTER COLUMN status SET DEFAULT 'RESERVED',
+  ADD COLUMN requested_id                     BOOLEAN       DEFAULT FALSE NOT NULL;
+
+ALTER TABLE job_applications_requested RENAME TO job_requested_applications;
+ALTER TABLE job_requested_applications
+  DROP CONSTRAINT job_applications_requested_job_id_fkey,
+  ADD CONSTRAINT job_requested_applications_job_id_fkey FOREIGN KEY (job_id) REFERENCES jobs (id) ON DELETE CASCADE;
+
+DROP INDEX job_applications_requested_application_id_index;
+CREATE INDEX job_requested_applications_application_id_index
+  ON job_requested_applications (application_id);
+DROP INDEX job_applications_requested_job_id_index;
+CREATE INDEX job_requested_applications_job_id_index
+  ON job_requested_applications (job_id);

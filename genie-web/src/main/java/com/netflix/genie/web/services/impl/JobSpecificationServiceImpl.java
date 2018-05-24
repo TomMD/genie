@@ -29,16 +29,15 @@ import com.netflix.genie.common.internal.dto.v4.Cluster;
 import com.netflix.genie.common.internal.dto.v4.Command;
 import com.netflix.genie.common.internal.dto.v4.Criterion;
 import com.netflix.genie.common.internal.dto.v4.ExecutionEnvironment;
-import com.netflix.genie.common.internal.dto.v4.ExecutionResourceCriteria;
 import com.netflix.genie.common.internal.dto.v4.JobMetadata;
 import com.netflix.genie.common.internal.dto.v4.JobRequest;
 import com.netflix.genie.common.internal.dto.v4.JobSpecification;
 import com.netflix.genie.common.internal.jobs.JobConstants;
 import com.netflix.genie.web.properties.JobsProperties;
-import com.netflix.genie.web.services.ApplicationService;
+import com.netflix.genie.web.services.ApplicationPersistenceService;
 import com.netflix.genie.web.services.ClusterLoadBalancer;
-import com.netflix.genie.web.services.ClusterService;
-import com.netflix.genie.web.services.CommandService;
+import com.netflix.genie.web.services.ClusterPersistenceService;
+import com.netflix.genie.web.services.CommandPersistenceService;
 import com.netflix.genie.web.services.JobSpecificationService;
 import com.netflix.genie.web.util.MetricsConstants;
 import com.netflix.genie.web.util.MetricsUtils;
@@ -46,7 +45,6 @@ import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.Tag;
 import lombok.extern.slf4j.Slf4j;
-import org.apache.commons.lang3.NotImplementedException;
 import org.apache.commons.lang3.StringUtils;
 import org.springframework.aop.TargetClassAware;
 import org.springframework.stereotype.Service;
@@ -54,7 +52,6 @@ import org.springframework.validation.annotation.Validated;
 
 import javax.annotation.ParametersAreNonnullByDefault;
 import javax.validation.Valid;
-import javax.validation.constraints.NotBlank;
 import javax.validation.constraints.NotEmpty;
 import java.io.File;
 import java.util.Comparator;
@@ -120,9 +117,9 @@ public class JobSpecificationServiceImpl implements JobSpecificationService {
     private static final String LOAD_BALANCER_STATUS_EXCEPTION = "exception";
     private static final String LOAD_BALANCER_STATUS_INVALID = "invalid";
 
-    private final ApplicationService applicationService;
-    private final ClusterService clusterService;
-    private final CommandService commandService;
+    private final ApplicationPersistenceService applicationPersistenceService;
+    private final ClusterPersistenceService clusterPersistenceService;
+    private final CommandPersistenceService commandPersistenceService;
     private final List<ClusterLoadBalancer> clusterLoadBalancers;
     private final MeterRegistry registry;
     private final int defaultMemory;
@@ -133,24 +130,24 @@ public class JobSpecificationServiceImpl implements JobSpecificationService {
     /**
      * Constructor.
      *
-     * @param applicationService   The service to use to manipulate applications
-     * @param clusterService       The service to use to manipulate clusters
-     * @param commandService       The service to use to manipulate commands
-     * @param clusterLoadBalancers The load balancer implementations to use
-     * @param registry             The metrics repository to use
-     * @param jobsProperties       The properties for running a job set by the user
+     * @param applicationPersistenceService The service to use to manipulate applications
+     * @param clusterPersistenceService     The service to use to manipulate clusters
+     * @param commandPersistenceService     The service to use to manipulate commands
+     * @param clusterLoadBalancers          The load balancer implementations to use
+     * @param registry                      The metrics repository to use
+     * @param jobsProperties                The properties for running a job set by the user
      */
     public JobSpecificationServiceImpl(
-        final ApplicationService applicationService,
-        final ClusterService clusterService,
-        final CommandService commandService,
+        final ApplicationPersistenceService applicationPersistenceService,
+        final ClusterPersistenceService clusterPersistenceService,
+        final CommandPersistenceService commandPersistenceService,
         @NotEmpty final List<ClusterLoadBalancer> clusterLoadBalancers,
         final MeterRegistry registry,
         final JobsProperties jobsProperties
     ) {
-        this.applicationService = applicationService;
-        this.clusterService = clusterService;
-        this.commandService = commandService;
+        this.applicationPersistenceService = applicationPersistenceService;
+        this.clusterPersistenceService = clusterPersistenceService;
+        this.commandPersistenceService = commandPersistenceService;
         this.clusterLoadBalancers = clusterLoadBalancers;
         this.defaultMemory = jobsProperties.getMemory().getDefaultJobMemory();
 
@@ -218,27 +215,6 @@ public class JobSpecificationServiceImpl implements JobSpecificationService {
         }
     }
 
-    /**
-     * {@inheritDoc}
-     */
-    @Override
-    public JobSpecification resolveJobSpecification(
-        final @NotBlank String id,
-        final @Valid ExecutionResourceCriteria criteria
-    ) {
-        return null;
-    }
-
-    /**
-     * Given a job id return the entire job specification that would be used by the agent to run a job.
-     *
-     * @param id The job id to get a specification for
-     * @return The job specification
-     */
-    public JobSpecification getJobSpecification(final String id) {
-        throw new NotImplementedException("Not yet implemented.");
-    }
-
     private Map<Cluster, String> queryForClustersAndCommands(
         final List<Criterion> clusterCriteria,
         final Criterion commandCriterion
@@ -247,7 +223,7 @@ public class JobSpecificationServiceImpl implements JobSpecificationService {
         final Set<Tag> tags = Sets.newHashSet();
         try {
             final Map<Cluster, String> clustersAndCommands
-                = this.clusterService.findClustersAndCommandsForCriteria(clusterCriteria, commandCriterion);
+                = this.clusterPersistenceService.findClustersAndCommandsForCriteria(clusterCriteria, commandCriterion);
             MetricsUtils.addSuccessTags(tags);
             return clustersAndCommands;
         } catch (final Throwable t) {
@@ -306,7 +282,7 @@ public class JobSpecificationServiceImpl implements JobSpecificationService {
         final Set<Tag> tags = Sets.newHashSet();
         try {
             log.info("Selecting command for job {} ", jobId);
-            final Command command = this.commandService.getCommand(commandId);
+            final Command command = this.commandPersistenceService.getCommand(commandId);
             log.info("Selected command {} for job {} ", commandId, jobId);
             MetricsUtils.addSuccessTags(tags);
             return command;
@@ -333,10 +309,10 @@ public class JobSpecificationServiceImpl implements JobSpecificationService {
             // TODO: What do we do about application status? Should probably check here
             final List<Application> applications = Lists.newArrayList();
             if (jobRequest.getCriteria().getApplicationIds().isEmpty()) {
-                applications.addAll(this.commandService.getApplicationsForCommand(commandId));
+                applications.addAll(this.commandPersistenceService.getApplicationsForCommand(commandId));
             } else {
                 for (final String applicationId : jobRequest.getCriteria().getApplicationIds()) {
-                    applications.add(this.applicationService.getApplication(applicationId));
+                    applications.add(this.applicationPersistenceService.getApplication(applicationId));
                 }
             }
             log.info(
