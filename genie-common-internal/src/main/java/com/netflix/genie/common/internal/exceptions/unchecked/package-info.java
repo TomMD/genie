@@ -1,6 +1,6 @@
 /*
  *
- *  Copyright 2015 Netflix, Inc.
+ *  Copyright 2018 Netflix, Inc.
  *
  *     Licensed under the Apache License, Version 2.0 (the "License");
  *     you may not use this file except in compliance with the License.
@@ -17,9 +17,12 @@
  */
 
 /**
- * Custom interceptors for the gRPC server.
+ * All unchecked (Runtime) exceptions for Genie.
  *
- * @author mprimi
+ * @author tgianos
  * @since 4.0.0
  */
-package com.netflix.genie.web.rpc.interceptors;
+@ParametersAreNonnullByDefault
+package com.netflix.genie.common.internal.exceptions.unchecked;
+
+import javax.annotation.ParametersAreNonnullByDefault;

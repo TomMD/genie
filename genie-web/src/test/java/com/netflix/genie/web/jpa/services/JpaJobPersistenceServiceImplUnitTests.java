@@ -28,6 +28,14 @@ import com.netflix.genie.common.exceptions.GenieConflictException;
 import com.netflix.genie.common.exceptions.GenieException;
 import com.netflix.genie.common.exceptions.GenieNotFoundException;
 import com.netflix.genie.common.exceptions.GeniePreconditionException;
+import com.netflix.genie.common.internal.dto.v4.AgentClientMetadata;
+import com.netflix.genie.common.internal.dto.v4.JobSpecification;
+import com.netflix.genie.common.internal.exceptions.unchecked.GenieApplicationNotFoundException;
+import com.netflix.genie.common.internal.exceptions.unchecked.GenieClusterNotFoundException;
+import com.netflix.genie.common.internal.exceptions.unchecked.GenieCommandNotFoundException;
+import com.netflix.genie.common.internal.exceptions.unchecked.GenieInvalidStatusException;
+import com.netflix.genie.common.internal.exceptions.unchecked.GenieJobAlreadyClaimedException;
+import com.netflix.genie.common.internal.exceptions.unchecked.GenieJobNotFoundException;
 import com.netflix.genie.test.categories.UnitTest;
 import com.netflix.genie.web.jpa.entities.ApplicationEntity;
 import com.netflix.genie.web.jpa.entities.ClusterEntity;
@@ -35,15 +43,12 @@ import com.netflix.genie.web.jpa.entities.CommandEntity;
 import com.netflix.genie.web.jpa.entities.FileEntity;
 import com.netflix.genie.web.jpa.entities.JobEntity;
 import com.netflix.genie.web.jpa.entities.TagEntity;
+import com.netflix.genie.web.jpa.entities.projections.v4.JobSpecificationProjection;
 import com.netflix.genie.web.jpa.entities.projections.v4.V4JobRequestProjection;
 import com.netflix.genie.web.jpa.repositories.JpaApplicationRepository;
 import com.netflix.genie.web.jpa.repositories.JpaClusterRepository;
 import com.netflix.genie.web.jpa.repositories.JpaCommandRepository;
-import com.netflix.genie.web.jpa.repositories.JpaFileRepository;
 import com.netflix.genie.web.jpa.repositories.JpaJobRepository;
-import com.netflix.genie.web.jpa.repositories.JpaTagRepository;
-import com.netflix.genie.web.services.FilePersistenceService;
-import com.netflix.genie.web.services.TagPersistenceService;
 import org.hamcrest.Matchers;
 import org.junit.Assert;
 import org.junit.Before;
@@ -80,8 +85,8 @@ public class JpaJobPersistenceServiceImplUnitTests {
     private JpaApplicationRepository applicationRepository;
     private JpaClusterRepository clusterRepository;
     private JpaCommandRepository commandRepository;
-    private JpaTagRepository tagRepository;
-    private JpaFileRepository fileRepository;
+    private JpaFilePersistenceService filePersistenceService;
+    private JpaTagPersistenceService tagPersistenceService;
 
     private JpaJobPersistenceServiceImpl jobPersistenceService;
 
@@ -94,14 +99,12 @@ public class JpaJobPersistenceServiceImplUnitTests {
         this.applicationRepository = Mockito.mock(JpaApplicationRepository.class);
         this.clusterRepository = Mockito.mock(JpaClusterRepository.class);
         this.commandRepository = Mockito.mock(JpaCommandRepository.class);
-        this.tagRepository = Mockito.mock(JpaTagRepository.class);
-        this.fileRepository = Mockito.mock(JpaFileRepository.class);
+        this.tagPersistenceService = Mockito.mock(JpaTagPersistenceService.class);
+        this.filePersistenceService = Mockito.mock(JpaFilePersistenceService.class);
 
         this.jobPersistenceService = new JpaJobPersistenceServiceImpl(
-            Mockito.mock(TagPersistenceService.class),
-            this.tagRepository,
-            Mockito.mock(FilePersistenceService.class),
-            this.fileRepository,
+            this.tagPersistenceService,
+            this.filePersistenceService,
             this.jobRepository,
             this.applicationRepository,
             this.clusterRepository,
@@ -163,13 +166,13 @@ public class JpaJobPersistenceServiceImplUnitTests {
 
         final TagEntity fooTag = new TagEntity();
         fooTag.setTag("foo");
-        Mockito.when(this.tagRepository.findByTag("foo")).thenReturn(Optional.of(fooTag));
+        Mockito.when(this.tagPersistenceService.getTag("foo")).thenReturn(Optional.of(fooTag));
         final TagEntity barTag = new TagEntity();
         barTag.setTag("bar");
-        Mockito.when(this.tagRepository.findByTag("bar")).thenReturn(Optional.of(barTag));
+        Mockito.when(this.tagPersistenceService.getTag("bar")).thenReturn(Optional.of(barTag));
         final FileEntity setupFileEntity = new FileEntity();
         setupFileEntity.setFile(setupFile);
-        Mockito.when(this.fileRepository.findByFile(setupFile)).thenReturn(Optional.of(setupFileEntity));
+        Mockito.when(this.filePersistenceService.getFile(setupFile)).thenReturn(Optional.of(setupFileEntity));
 
         final ArgumentCaptor<JobEntity> argument = ArgumentCaptor.forClass(JobEntity.class);
         this.jobPersistenceService.createJob(jobRequest, metadata, job, execution);
@@ -260,10 +263,10 @@ public class JpaJobPersistenceServiceImplUnitTests {
         final JobExecution execution = new JobExecution.Builder(UUID.randomUUID().toString()).build();
 
         Mockito
-            .when(this.tagRepository.findByTag(Mockito.anyString()))
+            .when(this.tagPersistenceService.getTag(Mockito.anyString()))
             .thenReturn(Optional.of(new TagEntity(UUID.randomUUID().toString())));
         Mockito
-            .when(this.fileRepository.findByFile(Mockito.anyString()))
+            .when(this.filePersistenceService.getFile(Mockito.anyString()))
             .thenReturn(Optional.of(new FileEntity(UUID.randomUUID().toString())));
         Mockito
             .when(this.jobRepository.save(Mockito.any(JobEntity.class)))
@@ -579,16 +582,302 @@ public class JpaJobPersistenceServiceImplUnitTests {
     }
 
     /**
-     * When a request is made for a job that doesn't have a record in the database a GenieNotFoundException is thrown.
-     *
-     * @throws GenieException When the job isn't found
+     * When a request is made for a job that doesn't have a record in the database an empty optional is returned.
      */
-    @Test(expected = GenieNotFoundException.class)
-    public void noJobRequestFoundThrowsException() throws GenieException {
+    @Test
+    public void noJobRequestFoundReturnsEmptyOptional() {
         Mockito
             .when(this.jobRepository.findByUniqueId(Mockito.anyString(), Mockito.eq(V4JobRequestProjection.class)))
             .thenReturn(Optional.empty());
 
-        this.jobPersistenceService.getJobRequest(UUID.randomUUID().toString());
+        Assert.assertFalse(this.jobPersistenceService.getJobRequest(UUID.randomUUID().toString()).isPresent());
+    }
+
+    /**
+     * If a job isn't found to save a specification for an exception is thrown.
+     */
+    @Test(expected = GenieJobNotFoundException.class)
+    public void noJobUnableToSaveJobSpecification() {
+        Mockito
+            .when(this.jobRepository.findByUniqueId(Mockito.anyString()))
+            .thenReturn(Optional.empty());
+
+        this.jobPersistenceService.saveJobSpecification(
+            UUID.randomUUID().toString(), Mockito.mock(JobSpecification.class)
+        );
+    }
+
+    /**
+     * If a job is already resolved nothing is done.
+     */
+    @Test
+    public void jobAlreadyResolvedDoesNotSaveSpecificationAgain() {
+        final JobEntity jobEntity = Mockito.mock(JobEntity.class);
+        final JobSpecification jobSpecification = Mockito.mock(JobSpecification.class);
+        Mockito
+            .when(this.jobRepository.findByUniqueId(Mockito.anyString()))
+            .thenReturn(Optional.of(jobEntity));
+
+        Mockito.when(jobEntity.isResolved()).thenReturn(true);
+
+        this.jobPersistenceService.saveJobSpecification(UUID.randomUUID().toString(), jobSpecification);
+
+        Mockito.verify(jobEntity, Mockito.never()).setCluster(Mockito.any(ClusterEntity.class));
+    }
+
+    /**
+     * If a job is already terminal.
+     */
+    @Test
+    public void jobAlreadyTerminalDoesNotSaveJobSpecification() {
+        final JobEntity jobEntity = Mockito.mock(JobEntity.class);
+        final JobSpecification jobSpecification = Mockito.mock(JobSpecification.class);
+        Mockito
+            .when(this.jobRepository.findByUniqueId(Mockito.anyString()))
+            .thenReturn(Optional.of(jobEntity));
+
+        Mockito.when(jobEntity.isResolved()).thenReturn(false);
+        Mockito.when(jobEntity.getStatus()).thenReturn(JobStatus.KILLED);
+
+        this.jobPersistenceService.saveJobSpecification(UUID.randomUUID().toString(), jobSpecification);
+
+        Mockito.verify(jobEntity, Mockito.never()).setCluster(Mockito.any(ClusterEntity.class));
+    }
+
+    /**
+     * If a job isn't found to save a specification for an exception is thrown.
+     */
+    @Test
+    public void noResourceToSaveForJobSpecification() {
+        final String jobId = UUID.randomUUID().toString();
+        final JobEntity jobEntity = Mockito.mock(JobEntity.class);
+        Mockito.when(jobEntity.isResolved()).thenReturn(false);
+        Mockito.when(jobEntity.getStatus()).thenReturn(JobStatus.RESERVED);
+
+        final String clusterId = UUID.randomUUID().toString();
+        final ClusterEntity clusterEntity = Mockito.mock(ClusterEntity.class);
+        final JobSpecification.ExecutionResource clusterResource
+            = Mockito.mock(JobSpecification.ExecutionResource.class);
+        Mockito.when(clusterResource.getId()).thenReturn(clusterId);
+        final String commandId = UUID.randomUUID().toString();
+        final CommandEntity commandEntity = Mockito.mock(CommandEntity.class);
+        final JobSpecification.ExecutionResource commandResource
+            = Mockito.mock(JobSpecification.ExecutionResource.class);
+        Mockito.when(commandResource.getId()).thenReturn(commandId);
+        final String applicationId = UUID.randomUUID().toString();
+        final JobSpecification.ExecutionResource applicationResource
+            = Mockito.mock(JobSpecification.ExecutionResource.class);
+        Mockito.when(applicationResource.getId()).thenReturn(applicationId);
+
+        final JobSpecification jobSpecification = Mockito.mock(JobSpecification.class);
+        Mockito.when(jobSpecification.getCluster()).thenReturn(clusterResource);
+        Mockito.when(jobSpecification.getCommand()).thenReturn(commandResource);
+        Mockito
+            .when(jobSpecification.getApplications())
+            .thenReturn(Lists.newArrayList(applicationResource));
+
+        Mockito
+            .when(this.jobRepository.findByUniqueId(jobId))
+            .thenReturn(Optional.of(jobEntity));
+
+        Mockito
+            .when(this.clusterRepository.findByUniqueId(clusterId))
+            .thenReturn(Optional.empty())
+            .thenReturn(Optional.of(clusterEntity))
+            .thenReturn(Optional.of(clusterEntity));
+
+        Mockito
+            .when(this.commandRepository.findByUniqueId(commandId))
+            .thenReturn(Optional.empty())
+            .thenReturn(Optional.of(commandEntity));
+        Mockito.when(this.applicationRepository.findByUniqueId(applicationId)).thenReturn(Optional.empty());
+
+        try {
+            this.jobPersistenceService.saveJobSpecification(jobId, jobSpecification);
+            Assert.fail();
+        } catch (final GenieClusterNotFoundException e) {
+            // expected
+        }
+        try {
+            this.jobPersistenceService.saveJobSpecification(jobId, jobSpecification);
+            Assert.fail();
+        } catch (final GenieCommandNotFoundException e) {
+            // expected
+        }
+        try {
+            this.jobPersistenceService.saveJobSpecification(jobId, jobSpecification);
+            Assert.fail();
+        } catch (final GenieApplicationNotFoundException e) {
+            // expected
+        }
+    }
+
+    /**
+     * If a job isn't found to retrieve a job specification.
+     */
+    @Test(expected = GenieJobNotFoundException.class)
+    public void noJobUnableToGetJobSpecification() {
+        Mockito
+            .when(this.jobRepository.findByUniqueId(Mockito.anyString(), Mockito.eq(JobSpecificationProjection.class)))
+            .thenReturn(Optional.empty());
+
+        this.jobPersistenceService.getJobSpecification(UUID.randomUUID().toString());
+    }
+
+
+    /**
+     * If a job isn't resolved empty {@link Optional} returned.
+     */
+    @Test
+    public void unresolvedJobReturnsEmptyJobSpecificationOptional() {
+        final JobEntity jobEntity = Mockito.mock(JobEntity.class);
+        Mockito
+            .when(this.jobRepository.findByUniqueId(Mockito.anyString(), Mockito.eq(JobSpecificationProjection.class)))
+            .thenReturn(Optional.of(jobEntity));
+
+        Mockito.when(jobEntity.isResolved()).thenReturn(false);
+
+        Assert.assertFalse(this.jobPersistenceService.getJobSpecification(UUID.randomUUID().toString()).isPresent());
+    }
+
+    /**
+     * Test all the error cases covered in the
+     * {@link JpaJobPersistenceServiceImpl#claimJob(String, AgentClientMetadata)} API.
+     */
+    @Test
+    public void testClaimJobErrorCases() {
+        Mockito
+            .when(this.jobRepository.findByUniqueId(Mockito.anyString()))
+            .thenReturn(Optional.empty());
+
+        try {
+            this.jobPersistenceService.claimJob(UUID.randomUUID().toString(), Mockito.mock(AgentClientMetadata.class));
+            Assert.fail();
+        } catch (final GenieJobNotFoundException e) {
+            // expected
+        }
+
+        final JobEntity jobEntity = Mockito.mock(JobEntity.class);
+        final String id = UUID.randomUUID().toString();
+        Mockito
+            .when(this.jobRepository.findByUniqueId(id))
+            .thenReturn(Optional.of(jobEntity));
+
+        Mockito.when(jobEntity.isClaimed()).thenReturn(true);
+
+        try {
+            this.jobPersistenceService.claimJob(id, Mockito.mock(AgentClientMetadata.class));
+            Assert.fail();
+        } catch (final GenieJobAlreadyClaimedException e) {
+            // expected
+        }
+
+        Mockito.when(jobEntity.isClaimed()).thenReturn(false);
+        Mockito.when(jobEntity.getStatus()).thenReturn(JobStatus.INVALID);
+
+        try {
+            this.jobPersistenceService.claimJob(id, Mockito.mock(AgentClientMetadata.class));
+            Assert.fail();
+        } catch (final GenieInvalidStatusException e) {
+            // expected
+        }
+    }
+
+    /**
+     * Test valid behavior of the {@link JpaJobPersistenceServiceImpl#claimJob(String, AgentClientMetadata)} API.
+     */
+    @Test
+    public void testClaimJobValidBehavior() {
+        final JobEntity jobEntity = Mockito.mock(JobEntity.class);
+        final AgentClientMetadata agentClientMetadata = Mockito.mock(AgentClientMetadata.class);
+        final String id = UUID.randomUUID().toString();
+
+        Mockito.when(this.jobRepository.findByUniqueId(id)).thenReturn(Optional.of(jobEntity));
+        Mockito.when(jobEntity.isClaimed()).thenReturn(false);
+        Mockito.when(jobEntity.getStatus()).thenReturn(JobStatus.RESOLVED);
+
+        final String agentHostname = UUID.randomUUID().toString();
+        Mockito.when(agentClientMetadata.getHostname()).thenReturn(Optional.of(agentHostname));
+        final String agentVersion = UUID.randomUUID().toString();
+        Mockito.when(agentClientMetadata.getVersion()).thenReturn(Optional.of(agentVersion));
+        final int agentPid = 238;
+        Mockito.when(agentClientMetadata.getPid()).thenReturn(Optional.of(agentPid));
+
+        this.jobPersistenceService.claimJob(id, agentClientMetadata);
+
+        Mockito.verify(jobEntity, Mockito.times(1)).setClaimed(true);
+        Mockito.verify(jobEntity, Mockito.times(1)).setStatus(JobStatus.CLAIMED);
+        Mockito.verify(jobEntity, Mockito.times(1)).setAgentHostname(agentHostname);
+        Mockito.verify(jobEntity, Mockito.times(1)).setAgentVersion(agentVersion);
+        Mockito.verify(jobEntity, Mockito.times(1)).setAgentPid(agentPid);
+    }
+
+    /**
+     * Test all the error cases covered in the
+     * {@link JpaJobPersistenceServiceImpl#updateJobStatus(String, JobStatus, JobStatus, String)} API.
+     */
+    @Test
+    public void testUpdateJobStatusErrorCases() {
+        final String id = UUID.randomUUID().toString();
+        try {
+            this.jobPersistenceService.updateJobStatus(id, JobStatus.CLAIMED, JobStatus.CLAIMED, null);
+            Assert.fail();
+        } catch (final GenieInvalidStatusException e) {
+            // expected
+        }
+
+        Mockito
+            .when(this.jobRepository.findByUniqueId(id))
+            .thenReturn(Optional.empty());
+
+        try {
+            this.jobPersistenceService.updateJobStatus(id, JobStatus.CLAIMED, JobStatus.INIT, null);
+            Assert.fail();
+        } catch (final GenieJobNotFoundException e) {
+            // expected
+        }
+
+        final JobEntity jobEntity = Mockito.mock(JobEntity.class);
+        Mockito
+            .when(this.jobRepository.findByUniqueId(id))
+            .thenReturn(Optional.of(jobEntity));
+
+        Mockito.when(jobEntity.getStatus()).thenReturn(JobStatus.INIT);
+
+        try {
+            this.jobPersistenceService.updateJobStatus(id, JobStatus.CLAIMED, JobStatus.INIT, null);
+            Assert.fail();
+        } catch (final GenieInvalidStatusException e) {
+            // expected
+        }
+    }
+
+    /**
+     * Test the valid behavior of
+     * {@link JpaJobPersistenceServiceImpl#updateJobStatus(String, JobStatus, JobStatus, String)}.
+     */
+    @Test
+    public void testUpdateJobValidBehavior() {
+        final String id = UUID.randomUUID().toString();
+        final String newStatusMessage = UUID.randomUUID().toString();
+        final JobEntity jobEntity = Mockito.mock(JobEntity.class);
+
+        Mockito.when(this.jobRepository.findByUniqueId(id)).thenReturn(Optional.of(jobEntity));
+        Mockito.when(jobEntity.getStatus()).thenReturn(JobStatus.INIT);
+
+        this.jobPersistenceService.updateJobStatus(id, JobStatus.INIT, JobStatus.RUNNING, newStatusMessage);
+
+        Mockito.verify(jobEntity, Mockito.times(1)).setStatus(JobStatus.RUNNING);
+        Mockito.verify(jobEntity, Mockito.times(1)).setStatusMsg(newStatusMessage);
+        Mockito.verify(jobEntity, Mockito.times(1)).setStarted(Mockito.any(Instant.class));
+
+        final String finalStatusMessage = UUID.randomUUID().toString();
+        Mockito.when(jobEntity.getStatus()).thenReturn(JobStatus.RUNNING);
+        Mockito.when(jobEntity.getStarted()).thenReturn(Optional.of(Instant.now()));
+        this.jobPersistenceService.updateJobStatus(id, JobStatus.RUNNING, JobStatus.SUCCEEDED, finalStatusMessage);
+
+        Mockito.verify(jobEntity, Mockito.times(1)).setStatus(JobStatus.SUCCEEDED);
+        Mockito.verify(jobEntity, Mockito.times(1)).setStatusMsg(finalStatusMessage);
+        Mockito.verify(jobEntity, Mockito.times(1)).setFinished(Mockito.any(Instant.class));
     }
 }

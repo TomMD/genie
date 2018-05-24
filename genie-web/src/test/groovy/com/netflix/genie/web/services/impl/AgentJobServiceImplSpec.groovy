@@ -17,9 +17,13 @@
  */
 package com.netflix.genie.web.services.impl
 
+import com.netflix.genie.common.dto.JobStatus
 import com.netflix.genie.common.internal.dto.v4.AgentClientMetadata
 import com.netflix.genie.common.internal.dto.v4.JobRequest
 import com.netflix.genie.common.internal.dto.v4.JobRequestMetadata
+import com.netflix.genie.common.internal.dto.v4.JobSpecification
+import com.netflix.genie.common.internal.exceptions.unchecked.GenieJobNotFoundException
+import com.netflix.genie.common.internal.exceptions.unchecked.GenieJobSpecificationNotFoundException
 import com.netflix.genie.test.categories.UnitTest
 import com.netflix.genie.web.services.JobPersistenceService
 import com.netflix.genie.web.services.JobSpecificationService
@@ -64,6 +68,8 @@ class AgentJobServiceImplSpec extends Specification {
         def jobSpecificationService = Mock(JobSpecificationService)
         def meterRegistry = Mock(MeterRegistry)
         def jobId = UUID.randomUUID().toString()
+        def jobRequest = Mock(JobRequest)
+        def jobSpecificationMock = Mock(JobSpecification)
 
         AgentJobServiceImpl service = new AgentJobServiceImpl(
                 jobPersistenceService,
@@ -72,9 +78,119 @@ class AgentJobServiceImplSpec extends Specification {
         )
 
         when:
+        service.resolveJobSpecification(jobId)
+
+        then:
+        1 * jobPersistenceService.getJobRequest(jobId) >> Optional.empty()
+        thrown(GenieJobNotFoundException)
+
+        when:
         def jobSpecification = service.resolveJobSpecification(jobId)
 
         then:
-        jobSpecification == null
+        1 * jobPersistenceService.getJobRequest(jobId) >> Optional.of(jobRequest)
+        1 * jobSpecificationService.resolveJobSpecification(jobId, jobRequest) >> jobSpecificationMock
+        1 * jobPersistenceService.saveJobSpecification(jobId, jobSpecificationMock)
+        jobSpecification == jobSpecificationMock
+    }
+
+    def "Can retrieve Job Specification"() {
+        def jobPersistenceService = Mock(JobPersistenceService)
+        def jobSpecificationService = Mock(JobSpecificationService)
+        def meterRegistry = Mock(MeterRegistry)
+        def jobId = UUID.randomUUID().toString()
+
+        AgentJobServiceImpl service = new AgentJobServiceImpl(
+                jobPersistenceService,
+                jobSpecificationService,
+                meterRegistry
+        )
+        def jobSpecificationMock = Mock(JobSpecification)
+        JobSpecification jobSpecification
+
+        when:
+        jobSpecification = service.getJobSpecification(jobId)
+
+        then:
+        1 * jobPersistenceService.getJobSpecification(jobId) >> Optional.of(jobSpecificationMock)
+        jobSpecification == jobSpecificationMock
+
+        when:
+        service.getJobSpecification(jobId)
+
+        then:
+        1 * jobPersistenceService.getJobSpecification(jobId) >> Optional.empty()
+        thrown(GenieJobSpecificationNotFoundException)
+    }
+
+    def "Can dry run job specification resolution"() {
+        def jobPersistenceService = Mock(JobPersistenceService)
+        def jobSpecificationService = Mock(JobSpecificationService)
+        def meterRegistry = Mock(MeterRegistry)
+        def jobRequest = Mock(JobRequest)
+
+        AgentJobServiceImpl service = new AgentJobServiceImpl(
+                jobPersistenceService,
+                jobSpecificationService,
+                meterRegistry
+        )
+
+        def jobSpecificationMock = Mock(JobSpecification)
+        def id = UUID.randomUUID().toString()
+
+        when:
+        def jobSpecification = service.dryRunJobSpecificationResolution(jobRequest)
+
+        then:
+        1 * jobRequest.getRequestedId() >> Optional.empty()
+        1 * jobSpecificationService.resolveJobSpecification(_ as String, jobRequest) >> jobSpecificationMock
+        jobSpecification == jobSpecificationMock
+
+        when:
+        jobSpecification = service.dryRunJobSpecificationResolution(jobRequest)
+
+        then:
+        1 * jobRequest.getRequestedId() >> Optional.of(id)
+        1 * jobSpecificationService.resolveJobSpecification(id, jobRequest) >> jobSpecificationMock
+        jobSpecification == jobSpecificationMock
+    }
+
+    def "Can claim job"() {
+        def jobPersistenceService = Mock(JobPersistenceService)
+        def jobSpecificationService = Mock(JobSpecificationService)
+        def meterRegistry = Mock(MeterRegistry)
+        def agentClientMetadata = Mock(AgentClientMetadata)
+        def id = UUID.randomUUID().toString()
+
+        AgentJobServiceImpl service = new AgentJobServiceImpl(
+                jobPersistenceService,
+                jobSpecificationService,
+                meterRegistry
+        )
+
+        when:
+        service.claimJob(id, agentClientMetadata)
+
+        then:
+        1 * jobPersistenceService.claimJob(id, agentClientMetadata)
+    }
+
+    def "Can update job status"() {
+        def jobPersistenceService = Mock(JobPersistenceService)
+        def jobSpecificationService = Mock(JobSpecificationService)
+        def meterRegistry = Mock(MeterRegistry)
+        def id = UUID.randomUUID().toString()
+
+        AgentJobServiceImpl service = new AgentJobServiceImpl(
+                jobPersistenceService,
+                jobSpecificationService,
+                meterRegistry
+        )
+
+        when:
+        service.updateJobStatus(id, JobStatus.CLAIMED, JobStatus.INIT, UUID.randomUUID().toString())
+
+        then:
+        1 * jobPersistenceService.updateJobStatus(id, JobStatus.CLAIMED, JobStatus.INIT, _ as String)
     }
 }

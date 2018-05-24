@@ -38,6 +38,7 @@ import com.netflix.genie.common.internal.dto.v4.ClusterRequest;
 import com.netflix.genie.common.internal.dto.v4.Command;
 import com.netflix.genie.common.internal.dto.v4.Criterion;
 import com.netflix.genie.common.internal.dto.v4.ExecutionEnvironment;
+import com.netflix.genie.common.internal.exceptions.unchecked.GenieRuntimeException;
 import com.netflix.genie.common.util.GenieObjectMapper;
 import com.netflix.genie.web.controllers.DtoConverters;
 import com.netflix.genie.web.jpa.entities.ClusterEntity;
@@ -48,17 +49,14 @@ import com.netflix.genie.web.jpa.entities.projections.ClusterCommandsProjection;
 import com.netflix.genie.web.jpa.entities.v4.EntityDtoConverters;
 import com.netflix.genie.web.jpa.repositories.JpaClusterRepository;
 import com.netflix.genie.web.jpa.repositories.JpaCommandRepository;
-import com.netflix.genie.web.jpa.repositories.JpaFileRepository;
-import com.netflix.genie.web.jpa.repositories.JpaTagRepository;
 import com.netflix.genie.web.jpa.specifications.JpaClusterSpecs;
 import com.netflix.genie.web.services.ClusterPersistenceService;
-import com.netflix.genie.web.services.FilePersistenceService;
-import com.netflix.genie.web.services.TagPersistenceService;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageImpl;
 import org.springframework.data.domain.Pageable;
+import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import javax.annotation.Nullable;
@@ -82,9 +80,11 @@ import java.util.stream.Collectors;
  * @author amsharma
  * @author tgianos
  */
+@Service
 @Transactional(
     rollbackFor = {
         GenieException.class,
+        GenieRuntimeException.class,
         ConstraintViolationException.class
     }
 )
@@ -97,21 +97,17 @@ public class JpaClusterPersistenceServiceImpl extends JpaBaseService implements 
      * Default constructor - initialize all required dependencies.
      *
      * @param tagPersistenceService  The tag service to use
-     * @param tagRepository          The tag repository to use
      * @param filePersistenceService The file service to use
-     * @param fileRepository         The file repository to use
      * @param clusterRepository      The cluster repository to use.
      * @param commandRepository      The command repository to use.
      */
     public JpaClusterPersistenceServiceImpl(
-        final TagPersistenceService tagPersistenceService,
-        final JpaTagRepository tagRepository,
-        final FilePersistenceService filePersistenceService,
-        final JpaFileRepository fileRepository,
+        final JpaTagPersistenceService tagPersistenceService,
+        final JpaFilePersistenceService filePersistenceService,
         final JpaClusterRepository clusterRepository,
         final JpaCommandRepository commandRepository
     ) {
-        super(tagPersistenceService, tagRepository, filePersistenceService, fileRepository);
+        super(tagPersistenceService, filePersistenceService);
         this.clusterRepository = clusterRepository;
         this.commandRepository = commandRepository;
     }
@@ -168,7 +164,7 @@ public class JpaClusterPersistenceServiceImpl extends JpaBaseService implements 
         // Find the tag entity references. If one doesn't exist return empty page as if the tag doesn't exist
         // no entities tied to that tag will exist either and today our search for tags is an AND
         if (tags != null) {
-            tagEntities = this.getTagRepository().findByTagIn(tags);
+            tagEntities = this.getTagPersistenceService().getTags(tags);
             if (tagEntities.size() != tags.size()) {
                 return new PageImpl<>(new ArrayList<>(), page, 0);
             }
@@ -392,7 +388,7 @@ public class JpaClusterPersistenceServiceImpl extends JpaBaseService implements 
         @NotBlank(message = "No cluster id entered. Unable to remove dependency.") final String id,
         @NotBlank(message = "No dependency entered. Unable to remove dependency.") final String dependency
     ) throws GenieException {
-        this.getFileRepository().findByFile(dependency).ifPresent(this.findCluster(id).getDependencies()::remove);
+        this.getFilePersistenceService().getFile(dependency).ifPresent(this.findCluster(id).getDependencies()::remove);
     }
 
     /**
@@ -446,7 +442,7 @@ public class JpaClusterPersistenceServiceImpl extends JpaBaseService implements 
         @NotBlank(message = "No cluster id entered. Unable to remove tag.") final String id,
         @NotBlank(message = "No tag entered. Unable to remove.") final String tag
     ) throws GenieException {
-        this.getTagRepository().findByTag(tag).ifPresent(this.findCluster(id).getTags()::remove);
+        this.getTagPersistenceService().getTag(tag).ifPresent(this.findCluster(id).getTags()::remove);
     }
 
     /**
@@ -566,29 +562,26 @@ public class JpaClusterPersistenceServiceImpl extends JpaBaseService implements 
         );
     }
 
-    private ClusterEntity createClusterEntity(final ClusterRequest request) throws GenieException {
+    private ClusterEntity createClusterEntity(final ClusterRequest request) {
         final ExecutionEnvironment resources = request.getResources();
         final ClusterMetadata metadata = request.getMetadata();
 
         final ClusterEntity entity = new ClusterEntity();
         this.setUniqueId(entity, request.getRequestedId().orElse(null));
-        this.setEntityResources(entity, resources);
-        this.setEntityTags(entity, metadata);
+        this.setEntityResources(resources, entity::setConfigs, entity::setDependencies, entity::setSetupFile);
+        this.setEntityTags(metadata.getTags(), entity::setTags);
         this.setEntityClusterMetadata(entity, metadata);
 
         return entity;
     }
 
-    private void updateEntityWithDtoContents(
-        final ClusterEntity entity,
-        final Cluster dto
-    ) throws GenieException {
+    private void updateEntityWithDtoContents(final ClusterEntity entity, final Cluster dto) {
         final ExecutionEnvironment resources = dto.getResources();
         final ClusterMetadata metadata = dto.getMetadata();
 
         // Save all the unowned entities first to avoid unintended flushes
-        this.setEntityResources(entity, resources);
-        this.setEntityTags(entity, metadata);
+        this.setEntityResources(resources, entity::setConfigs, entity::setDependencies, entity::setSetupFile);
+        this.setEntityTags(metadata.getTags(), entity::setTags);
         this.setEntityClusterMetadata(entity, metadata);
     }
 
@@ -600,29 +593,6 @@ public class JpaClusterPersistenceServiceImpl extends JpaBaseService implements 
         entity.setDescription(metadata.getDescription().orElse(null));
         entity.setStatus(metadata.getStatus());
         EntityDtoConverters.setJsonField(metadata.getMetadata().orElse(null), entity::setMetadata);
-    }
-
-    private void setEntityResources(
-        final ClusterEntity entity,
-        final ExecutionEnvironment resources
-    ) throws GenieException {
-        // Save all the unowned entities first to avoid unintended flushes
-        final Set<FileEntity> configs = this.createAndGetFileEntities(resources.getConfigs());
-        final Set<FileEntity> dependencies = this.createAndGetFileEntities(resources.getDependencies());
-        final FileEntity setupFile = resources.getSetupFile().isPresent()
-            ? this.createAndGetFileEntity(resources.getSetupFile().get())
-            : null;
-
-        entity.setConfigs(configs);
-        entity.setDependencies(dependencies);
-        entity.setSetupFile(setupFile);
-    }
-
-    private void setEntityTags(
-        final ClusterEntity entity,
-        final ClusterMetadata metadata
-    ) throws GenieException {
-        entity.setTags(this.createAndGetTagEntities(metadata.getTags()));
     }
 
     private Map<Cluster, String> findClustersAndCommandsForJob(

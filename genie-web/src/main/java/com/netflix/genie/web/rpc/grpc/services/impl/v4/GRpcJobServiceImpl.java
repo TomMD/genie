@@ -17,21 +17,31 @@
  */
 package com.netflix.genie.web.rpc.grpc.services.impl.v4;
 
+import com.netflix.genie.common.dto.JobStatus;
 import com.netflix.genie.common.exceptions.GeniePreconditionException;
 import com.netflix.genie.common.internal.dto.v4.AgentClientMetadata;
 import com.netflix.genie.common.internal.dto.v4.JobRequest;
 import com.netflix.genie.common.internal.dto.v4.JobSpecification;
 import com.netflix.genie.common.internal.dto.v4.converters.JobServiceProtoConverter;
+import com.netflix.genie.common.internal.exceptions.unchecked.GenieInvalidStatusException;
+import com.netflix.genie.common.internal.exceptions.unchecked.GenieJobAlreadyClaimedException;
+import com.netflix.genie.common.internal.exceptions.unchecked.GenieJobNotFoundException;
+import com.netflix.genie.proto.ChangeJobStatusError;
+import com.netflix.genie.proto.ChangeJobStatusRequest;
+import com.netflix.genie.proto.ChangeJobStatusResponse;
+import com.netflix.genie.proto.ClaimJobError;
+import com.netflix.genie.proto.ClaimJobRequest;
+import com.netflix.genie.proto.ClaimJobResponse;
+import com.netflix.genie.proto.DryRunJobSpecificationRequest;
 import com.netflix.genie.proto.JobServiceGrpc;
 import com.netflix.genie.proto.JobSpecificationRequest;
 import com.netflix.genie.proto.JobSpecificationResponse;
 import com.netflix.genie.proto.ReserveJobIdError;
 import com.netflix.genie.proto.ReserveJobIdRequest;
 import com.netflix.genie.proto.ReserveJobIdResponse;
-import com.netflix.genie.web.rpc.interceptors.SimpleLoggingInterceptor;
+import com.netflix.genie.web.rpc.grpc.interceptors.SimpleLoggingInterceptor;
 import com.netflix.genie.web.services.AgentJobService;
 import io.grpc.stub.StreamObserver;
-import io.micrometer.core.instrument.MeterRegistry;
 import lombok.extern.slf4j.Slf4j;
 import net.devh.springboot.autoconfigure.grpc.server.GrpcService;
 import org.apache.commons.lang3.StringUtils;
@@ -52,17 +62,16 @@ import org.apache.commons.lang3.StringUtils;
 @Slf4j
 public class GRpcJobServiceImpl extends JobServiceGrpc.JobServiceImplBase {
     private final AgentJobService agentJobService;
-    private final MeterRegistry registry;
+
+    // TODO: Metrics which I believe can be captured by an interceptor
 
     /**
      * Constructor.
      *
      * @param agentJobService The implementation of the {@link AgentJobService} to use
-     * @param registry        The metrics repository to use
      */
-    public GRpcJobServiceImpl(final AgentJobService agentJobService, final MeterRegistry registry) {
+    public GRpcJobServiceImpl(final AgentJobService agentJobService) {
         this.agentJobService = agentJobService;
-        this.registry = registry;
     }
 
     /**
@@ -76,7 +85,6 @@ public class GRpcJobServiceImpl extends JobServiceGrpc.JobServiceImplBase {
         final ReserveJobIdRequest request,
         final StreamObserver<ReserveJobIdResponse> responseObserver
     ) {
-        // TODO: Metrics
         try {
             final JobRequest jobRequest = JobServiceProtoConverter.toJobRequestDTO(request);
             final AgentClientMetadata agentClientMetadata
@@ -117,7 +125,6 @@ public class GRpcJobServiceImpl extends JobServiceGrpc.JobServiceImplBase {
         final JobSpecificationRequest request,
         final StreamObserver<JobSpecificationResponse> responseObserver
     ) {
-        // TODO: Metrics?
         final String id = request.getId();
         if (StringUtils.isBlank(id)) {
             responseObserver.onNext(
@@ -129,9 +136,9 @@ public class GRpcJobServiceImpl extends JobServiceGrpc.JobServiceImplBase {
             try {
                 final JobSpecification jobSpec = this.agentJobService.resolveJobSpecification(id);
                 responseObserver.onNext(JobServiceProtoConverter.toProtoJobSpecificationResponse(jobSpec));
-            } catch (final Throwable t) {
-                log.error(t.getMessage(), t);
-                responseObserver.onNext(JobServiceProtoConverter.toProtoJobSpecificationResponse(t));
+            } catch (final Exception e) {
+                log.error(e.getMessage(), e);
+                responseObserver.onNext(JobServiceProtoConverter.toProtoJobSpecificationResponse(e));
             }
         }
         responseObserver.onCompleted();
@@ -139,7 +146,7 @@ public class GRpcJobServiceImpl extends JobServiceGrpc.JobServiceImplBase {
 
     /**
      * Assuming a specification has already been resolved the agent will call this API with a job id to fetch the
-     * specification. The server will mark the specification as owned.
+     * specification.
      *
      * @param request          The request containing the job id to return the specification for
      * @param responseObserver How to send a response
@@ -149,6 +156,168 @@ public class GRpcJobServiceImpl extends JobServiceGrpc.JobServiceImplBase {
         final JobSpecificationRequest request,
         final StreamObserver<JobSpecificationResponse> responseObserver
     ) {
-        super.getJobSpecification(request, responseObserver);
+        final String id = request.getId();
+        if (StringUtils.isBlank(id)) {
+            responseObserver.onNext(
+                JobServiceProtoConverter.toProtoJobSpecificationResponse(
+                    new GeniePreconditionException("No job id entered")
+                )
+            );
+        } else {
+            try {
+                final JobSpecification jobSpecification = this.agentJobService.getJobSpecification(id);
+                responseObserver.onNext(JobServiceProtoConverter.toProtoJobSpecificationResponse(jobSpecification));
+            } catch (final Exception e) {
+                log.error(e.getMessage(), e);
+                responseObserver.onNext(JobServiceProtoConverter.toProtoJobSpecificationResponse(e));
+            }
+        }
+        responseObserver.onCompleted();
+    }
+
+    /**
+     * The agent requests that a job specification be resolved without impacting any state in the database. This
+     * operation is completely transient and just reflects what the job specification would look like given the
+     * current state of the system and the input parameters.
+     *
+     * @param request          The request containing all the metadata required to resolve a job specification
+     * @param responseObserver The observer to send a response with
+     */
+    @Override
+    public void resolveJobSpecificationDryRun(
+        final DryRunJobSpecificationRequest request,
+        final StreamObserver<JobSpecificationResponse> responseObserver
+    ) {
+        try {
+            final JobRequest jobRequest = JobServiceProtoConverter.toJobRequestDTO(request);
+            final JobSpecification jobSpecification = this.agentJobService.dryRunJobSpecificationResolution(jobRequest);
+            responseObserver.onNext(JobServiceProtoConverter.toProtoJobSpecificationResponse(jobSpecification));
+        } catch (final Exception e) {
+            log.error("Error resolving job specification for request " + request, e);
+            responseObserver.onNext(JobServiceProtoConverter.toProtoJobSpecificationResponse(e));
+        }
+        responseObserver.onCompleted();
+    }
+
+    /**
+     * When an agent is claiming responsibility and ownership for a job this API is called.
+     *
+     * @param request          The request containing the job id being claimed and other pertinent metadata
+     * @param responseObserver The observer to send a response with
+     */
+    @Override
+    public void claimJob(final ClaimJobRequest request, final StreamObserver<ClaimJobResponse> responseObserver) {
+        final String id = request.getId();
+        if (StringUtils.isBlank(id)) {
+            responseObserver.onNext(
+                ClaimJobResponse
+                    .newBuilder()
+                    .setSuccessful(false)
+                    .setError(
+                        ClaimJobError
+                            .newBuilder()
+                            .setType(ClaimJobError.Type.NO_ID_SUPPLIED)
+                            .setMessage("No job id provided. Unable to claim.")
+                            .build()
+                    )
+                    .build()
+            );
+        } else {
+            try {
+                final AgentClientMetadata clientMetadata
+                    = JobServiceProtoConverter.toAgentClientMetadataDTO(request.getAgentMetadata());
+                this.agentJobService.claimJob(id, clientMetadata);
+                responseObserver.onNext(ClaimJobResponse.newBuilder().setSuccessful(true).build());
+            } catch (final Exception e) {
+                log.error(e.getMessage(), e);
+                final ClaimJobError.Builder builder = ClaimJobError.newBuilder();
+                if (e.getMessage() != null) {
+                    builder.setMessage(e.getMessage());
+                } else {
+                    builder.setMessage("No error message provided");
+                }
+
+                if (e instanceof GenieJobAlreadyClaimedException) {
+                    builder.setType(ClaimJobError.Type.ALREADY_CLAIMED);
+                } else if (e instanceof GenieJobNotFoundException) {
+                    builder.setType(ClaimJobError.Type.NO_SUCH_JOB);
+                } else if (e instanceof GenieInvalidStatusException) {
+                    builder.setType(ClaimJobError.Type.INVALID_STATUS);
+                } else {
+                    builder.setType(ClaimJobError.Type.UNKNOWN);
+                }
+                responseObserver.onNext(
+                    ClaimJobResponse
+                        .newBuilder()
+                        .setSuccessful(false)
+                        .setError(builder)
+                        .build()
+                );
+            }
+        }
+        responseObserver.onCompleted();
+    }
+
+    /**
+     * When the agent wants to tell the system that the status of a job is changed this API is called.
+     *
+     * @param request          The request containing the necessary metadata to change job status for a given job
+     * @param responseObserver The observer to send a response with
+     */
+    @Override
+    public void changeJobStatus(
+        final ChangeJobStatusRequest request,
+        final StreamObserver<ChangeJobStatusResponse> responseObserver
+    ) {
+        final String id = request.getId();
+        if (StringUtils.isBlank(id)) {
+            responseObserver.onNext(
+                ChangeJobStatusResponse
+                    .newBuilder()
+                    .setSuccessful(false)
+                    .setError(
+                        ChangeJobStatusError
+                            .newBuilder()
+                            .setType(ChangeJobStatusError.Type.NO_ID_SUPPLIED)
+                            .setMessage("No job id provided. Unable to update status.")
+                            .build()
+                    )
+                    .build()
+            );
+        } else {
+            try {
+                final JobStatus currentStatus = JobStatus.parse(request.getCurrentStatus());
+                final JobStatus newStatus = JobStatus.parse(request.getNewStatus());
+                final String newStatusMessage = request.getNewStatusMessage();
+                this.agentJobService.updateJobStatus(id, currentStatus, newStatus, newStatusMessage);
+                responseObserver.onNext(ChangeJobStatusResponse.newBuilder().setSuccessful(true).build());
+            } catch (final Exception e) {
+                log.error(e.getMessage(), e);
+                final ChangeJobStatusError.Builder builder = ChangeJobStatusError.newBuilder();
+                if (e.getMessage() != null) {
+                    builder.setMessage(e.getMessage());
+                } else {
+                    builder.setMessage("No error message provided");
+                }
+
+                if (e instanceof GenieJobNotFoundException) {
+                    builder.setType(ChangeJobStatusError.Type.NO_SUCH_JOB);
+                } else if (e instanceof GenieInvalidStatusException) {
+                    builder.setType(ChangeJobStatusError.Type.INCORRECT_CURRENT_STATUS);
+                } else if (e instanceof GeniePreconditionException) {
+                    builder.setType(ChangeJobStatusError.Type.UNKNOWN_STATUS_SUPPLIED);
+                } else {
+                    builder.setType(ChangeJobStatusError.Type.UNKNOWN);
+                }
+                responseObserver.onNext(
+                    ChangeJobStatusResponse
+                        .newBuilder()
+                        .setSuccessful(false)
+                        .setError(builder)
+                        .build()
+                );
+            }
+        }
+        responseObserver.onCompleted();
     }
 }

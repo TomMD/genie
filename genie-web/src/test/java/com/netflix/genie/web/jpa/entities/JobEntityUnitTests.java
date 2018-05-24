@@ -807,12 +807,36 @@ public class JobEntityUnitTests extends EntityTestsBase {
      * Test setter/getter.
      */
     @Test
+    public void canSetResolved() {
+        Assert.assertFalse(this.jobEntity.isResolved());
+        this.jobEntity.setResolved(true);
+        Assert.assertTrue(this.jobEntity.isResolved());
+    }
+
+    /**
+     * Test setter/getter.
+     */
+    @Test
     public void canSetRequestedJobDirectoryLocation() {
         Assert.assertFalse(this.jobEntity.getRequestedJobDirectoryLocation().isPresent());
         final String location = UUID.randomUUID().toString();
         this.jobEntity.setRequestedJobDirectoryLocation(location);
         Assert.assertThat(
             this.jobEntity.getRequestedJobDirectoryLocation().orElse(UUID.randomUUID().toString()),
+            Matchers.is(location)
+        );
+    }
+
+    /**
+     * Test setter/getter.
+     */
+    @Test
+    public void canSetJobDirectoryLocation() {
+        Assert.assertFalse(this.jobEntity.getJobDirectoryLocation().isPresent());
+        final String location = UUID.randomUUID().toString();
+        this.jobEntity.setJobDirectoryLocation(location);
+        Assert.assertThat(
+            this.jobEntity.getJobDirectoryLocation().orElse(UUID.randomUUID().toString()),
             Matchers.is(location)
         );
     }
@@ -843,6 +867,44 @@ public class JobEntityUnitTests extends EntityTestsBase {
             this.jobEntity.getRequestedAgentEnvironmentExt().orElse(UUID.randomUUID().toString()),
             Matchers.is(ext)
         );
+    }
+
+    /**
+     * Test setter/getter.
+     */
+    @Test
+    public void canSetAgentVersion() {
+        Assert.assertFalse(this.jobEntity.getAgentVersion().isPresent());
+        final String version = UUID.randomUUID().toString();
+        this.jobEntity.setAgentVersion(version);
+        Assert.assertThat(
+            this.jobEntity.getAgentVersion().orElse(UUID.randomUUID().toString()),
+            Matchers.is(version)
+        );
+    }
+
+    /**
+     * Test setter/getter.
+     */
+    @Test
+    public void canSetAgentPid() {
+        Assert.assertFalse(this.jobEntity.getAgentPid().isPresent());
+        final int pid = 31_382;
+        this.jobEntity.setAgentPid(pid);
+        Assert.assertThat(
+            this.jobEntity.getAgentPid().orElseGet(RandomSuppliers.INT),
+            Matchers.is(pid)
+        );
+    }
+
+    /**
+     * Test setter/getter.
+     */
+    @Test
+    public void canSetClaimed() {
+        Assert.assertFalse(this.jobEntity.isClaimed());
+        this.jobEntity.setClaimed(true);
+        Assert.assertTrue(this.jobEntity.isClaimed());
     }
 
     /**

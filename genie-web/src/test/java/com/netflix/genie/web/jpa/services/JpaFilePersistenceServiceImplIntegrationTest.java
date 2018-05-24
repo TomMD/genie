@@ -27,7 +27,6 @@ import com.netflix.genie.common.internal.dto.v4.ExecutionEnvironment;
 import com.netflix.genie.test.categories.IntegrationTest;
 import com.netflix.genie.web.jpa.entities.FileEntity;
 import com.netflix.genie.web.services.ApplicationPersistenceService;
-import com.netflix.genie.web.services.FilePersistenceService;
 import org.hamcrest.Matchers;
 import org.junit.Assert;
 import org.junit.Test;
@@ -36,6 +35,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 
 import java.time.Instant;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 
 /**
@@ -50,7 +50,7 @@ public class JpaFilePersistenceServiceImplIntegrationTest extends DBUnitTestBase
 
     // This needs to be injected as a Spring Bean otherwise transactions don't work as there is no proxy
     @Autowired
-    private FilePersistenceService filePersistenceService;
+    private JpaFilePersistenceService filePersistenceService;
 
     @Autowired
     private ApplicationPersistenceService applicationPersistenceService;
@@ -63,10 +63,11 @@ public class JpaFilePersistenceServiceImplIntegrationTest extends DBUnitTestBase
     public void canCreateFileIfNotExists() {
         Assert.assertThat(this.fileRepository.count(), Matchers.is(0L));
         final String file = UUID.randomUUID().toString();
+        Assert.assertFalse(this.filePersistenceService.getFile(file).isPresent());
         this.filePersistenceService.createFileIfNotExists(file);
         Assert.assertThat(this.fileRepository.count(), Matchers.is(1L));
         Assert.assertTrue(this.fileRepository.existsByFile(file));
-        final Optional<FileEntity> fileEntityOptional = this.fileRepository.findByFile(file);
+        final Optional<FileEntity> fileEntityOptional = this.filePersistenceService.getFile(file);
         Assert.assertTrue(fileEntityOptional.isPresent());
         final FileEntity fileEntity = fileEntityOptional.get();
         Assert.assertThat(fileEntity.getFile(), Matchers.is(file));
@@ -75,7 +76,7 @@ public class JpaFilePersistenceServiceImplIntegrationTest extends DBUnitTestBase
         this.filePersistenceService.createFileIfNotExists(file);
         Assert.assertThat(this.fileRepository.count(), Matchers.is(1L));
         Assert.assertTrue(this.fileRepository.existsByFile(file));
-        final Optional<FileEntity> fileEntityOptional2 = this.fileRepository.findByFile(file);
+        final Optional<FileEntity> fileEntityOptional2 = this.filePersistenceService.getFile(file);
         Assert.assertTrue(fileEntityOptional2.isPresent());
         final FileEntity fileEntity2 = fileEntityOptional2.get();
         Assert.assertThat(fileEntity2.getFile(), Matchers.is(file));
@@ -134,5 +135,33 @@ public class JpaFilePersistenceServiceImplIntegrationTest extends DBUnitTestBase
         Assert.assertTrue(this.fileRepository.existsByFile(file5));
 
         this.applicationPersistenceService.deleteApplication(appId);
+    }
+
+    /**
+     * Make sure we can find files.
+     */
+    @Test
+    public void canFindFiles() {
+        Assert.assertThat(this.fileRepository.count(), Matchers.is(0L));
+        final String file1 = UUID.randomUUID().toString();
+        final String file2 = UUID.randomUUID().toString();
+        this.filePersistenceService.createFileIfNotExists(file1);
+        final FileEntity fileEntity1
+            = this.filePersistenceService.getFile(file1).orElseThrow(IllegalArgumentException::new);
+        this.filePersistenceService.createFileIfNotExists(file2);
+        final FileEntity fileEntity2
+            = this.filePersistenceService.getFile(file2).orElseThrow(IllegalArgumentException::new);
+
+        Set<FileEntity> files = this.filePersistenceService.getFiles(Sets.newHashSet(file1, file2));
+        Assert.assertThat(files.size(), Matchers.is(2));
+        Assert.assertThat(files, Matchers.hasItems(fileEntity1, fileEntity2));
+
+        files = this.filePersistenceService.getFiles(Sets.newHashSet(file1, file2, UUID.randomUUID().toString()));
+        Assert.assertThat(files.size(), Matchers.is(2));
+        Assert.assertThat(files, Matchers.hasItems(fileEntity1, fileEntity2));
+
+        files = this.filePersistenceService.getFiles(Sets.newHashSet(file1, UUID.randomUUID().toString()));
+        Assert.assertThat(files.size(), Matchers.is(1));
+        Assert.assertThat(files, Matchers.hasItem(fileEntity1));
     }
 }

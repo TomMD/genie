@@ -19,14 +19,16 @@ package com.netflix.genie.web.jpa.services;
 
 import com.netflix.genie.web.jpa.entities.TagEntity;
 import com.netflix.genie.web.jpa.repositories.JpaTagRepository;
-import com.netflix.genie.web.services.TagPersistenceService;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import javax.validation.constraints.NotBlank;
 import javax.validation.constraints.NotNull;
 import java.time.Instant;
+import java.util.Optional;
+import java.util.Set;
 import java.util.stream.Collectors;
 
 /**
@@ -35,9 +37,10 @@ import java.util.stream.Collectors;
  * @author tgianos
  * @since 3.3.0
  */
-@Slf4j
+@Service
 @Transactional
-public class JpaTagPersistenceServiceImpl implements TagPersistenceService {
+@Slf4j
+public class JpaTagPersistenceServiceImpl implements JpaTagPersistenceService {
 
     private final JpaTagRepository tagRepository;
 
@@ -79,5 +82,23 @@ public class JpaTagPersistenceServiceImpl implements TagPersistenceService {
                 .map(Number::longValue)
                 .collect(Collectors.toSet())
         );
+    }
+
+    /**
+     * {@inheritDoc}
+     */
+    @Override
+    @Transactional(readOnly = true)
+    public Optional<TagEntity> getTag(@NotBlank(message = "Tag string to find can't be blank") final String tag) {
+        return this.tagRepository.findByTag(tag);
+    }
+
+    /**
+     * {@inheritDoc}
+     */
+    @Override
+    @Transactional(readOnly = true)
+    public Set<TagEntity> getTags(@NotNull final Set<String> tags) {
+        return this.tagRepository.findByTagIn(tags);
     }
 }

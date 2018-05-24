@@ -33,6 +33,7 @@ import com.netflix.genie.common.internal.dto.v4.ApplicationMetadata;
 import com.netflix.genie.common.internal.dto.v4.ApplicationRequest;
 import com.netflix.genie.common.internal.dto.v4.Command;
 import com.netflix.genie.common.internal.dto.v4.ExecutionEnvironment;
+import com.netflix.genie.common.internal.exceptions.unchecked.GenieRuntimeException;
 import com.netflix.genie.common.util.GenieObjectMapper;
 import com.netflix.genie.web.jpa.entities.ApplicationEntity;
 import com.netflix.genie.web.jpa.entities.CommandEntity;
@@ -41,18 +42,15 @@ import com.netflix.genie.web.jpa.entities.TagEntity;
 import com.netflix.genie.web.jpa.entities.v4.EntityDtoConverters;
 import com.netflix.genie.web.jpa.repositories.JpaApplicationRepository;
 import com.netflix.genie.web.jpa.repositories.JpaCommandRepository;
-import com.netflix.genie.web.jpa.repositories.JpaFileRepository;
-import com.netflix.genie.web.jpa.repositories.JpaTagRepository;
 import com.netflix.genie.web.jpa.specifications.JpaApplicationSpecs;
 import com.netflix.genie.web.jpa.specifications.JpaCommandSpecs;
 import com.netflix.genie.web.services.ApplicationPersistenceService;
-import com.netflix.genie.web.services.FilePersistenceService;
-import com.netflix.genie.web.services.TagPersistenceService;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageImpl;
 import org.springframework.data.domain.Pageable;
+import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import javax.annotation.Nullable;
@@ -74,9 +72,11 @@ import java.util.stream.Collectors;
  * @author tgianos
  * @since 2.0.0
  */
+@Service
 @Transactional(
     rollbackFor = {
         GenieException.class,
+        GenieRuntimeException.class,
         ConstraintViolationException.class
     }
 )
@@ -90,21 +90,17 @@ public class JpaApplicationPersistenceServiceImpl extends JpaBaseService impleme
      * Default constructor.
      *
      * @param tagPersistenceService  The tag service to use
-     * @param tagRepository          The tag repository to use
      * @param filePersistenceService The file service to use
-     * @param fileRepository         The file repository to use
      * @param applicationRepository  The application repository to use
      * @param commandRepository      The command repository to use
      */
     public JpaApplicationPersistenceServiceImpl(
-        final TagPersistenceService tagPersistenceService,
-        final JpaTagRepository tagRepository,
-        final FilePersistenceService filePersistenceService,
-        final JpaFileRepository fileRepository,
+        final JpaTagPersistenceService tagPersistenceService,
+        final JpaFilePersistenceService filePersistenceService,
         final JpaApplicationRepository applicationRepository,
         final JpaCommandRepository commandRepository
     ) {
-        super(tagPersistenceService, tagRepository, filePersistenceService, fileRepository);
+        super(tagPersistenceService, filePersistenceService);
         this.applicationRepository = applicationRepository;
         this.commandRepository = commandRepository;
     }
@@ -161,7 +157,7 @@ public class JpaApplicationPersistenceServiceImpl extends JpaBaseService impleme
         // Find the tag entity references. If one doesn't exist return empty page as if the tag doesn't exist
         // no entities tied to that tag will exist either and today our search for tags is an AND
         if (tags != null) {
-            tagEntities = this.getTagRepository().findByTagIn(tags);
+            tagEntities = this.getTagPersistenceService().getTags(tags);
             if (tagEntities.size() != tags.size()) {
                 return new PageImpl<>(new ArrayList<>(), page, 0);
             }
@@ -298,7 +294,7 @@ public class JpaApplicationPersistenceServiceImpl extends JpaBaseService impleme
         @NotBlank(message = "No application id entered. Unable to remove configuration.") final String id,
         @NotBlank(message = "No config entered. Unable to remove.") final String config
     ) throws GenieException {
-        this.getFileRepository().findByFile(config).ifPresent(this.findApplication(id).getConfigs()::remove);
+        this.getFilePersistenceService().getFile(config).ifPresent(this.findApplication(id).getConfigs()::remove);
     }
 
     /**
@@ -352,7 +348,9 @@ public class JpaApplicationPersistenceServiceImpl extends JpaBaseService impleme
         @NotBlank(message = "No application id entered. Unable to remove dependency.") final String id,
         @NotBlank(message = "No dependency entered. Unable to remove dependency.") final String dependency
     ) throws GenieException {
-        this.getFileRepository().findByFile(dependency).ifPresent(this.findApplication(id).getDependencies()::remove);
+        this.getFilePersistenceService()
+            .getFile(dependency)
+            .ifPresent(this.findApplication(id).getDependencies()::remove);
     }
 
     /**
@@ -406,7 +404,7 @@ public class JpaApplicationPersistenceServiceImpl extends JpaBaseService impleme
         @NotBlank(message = "No application id entered. Unable to remove tag.") final String id,
         @NotBlank(message = "No tag entered. Unable to remove.") final String tag
     ) throws GenieException {
-        this.getTagRepository().findByTag(tag).ifPresent(this.findApplication(id).getTags()::remove);
+        this.getTagPersistenceService().getTag(tag).ifPresent(this.findApplication(id).getTags()::remove);
     }
 
     /**
@@ -443,29 +441,26 @@ public class JpaApplicationPersistenceServiceImpl extends JpaBaseService impleme
             .orElseThrow(() -> new GenieNotFoundException("No application with id " + id));
     }
 
-    private ApplicationEntity createApplicationEntity(final ApplicationRequest request) throws GenieException {
+    private ApplicationEntity createApplicationEntity(final ApplicationRequest request) {
         final ExecutionEnvironment resources = request.getResources();
         final ApplicationMetadata metadata = request.getMetadata();
 
         final ApplicationEntity entity = new ApplicationEntity();
         this.setUniqueId(entity, request.getRequestedId().orElse(null));
-        this.setEntityResources(entity, resources);
-        this.setEntityTags(entity, metadata);
+        this.setEntityResources(resources, entity::setConfigs, entity::setDependencies, entity::setSetupFile);
+        this.setEntityTags(metadata.getTags(), entity::setTags);
         this.setEntityApplicationMetadata(entity, metadata);
 
         return entity;
     }
 
-    private void updateEntityWithDtoContents(
-        final ApplicationEntity entity,
-        final Application dto
-    ) throws GenieException {
+    private void updateEntityWithDtoContents(final ApplicationEntity entity, final Application dto) {
         final ExecutionEnvironment resources = dto.getResources();
         final ApplicationMetadata metadata = dto.getMetadata();
 
         // Save all the unowned entities first to avoid unintended flushes
-        this.setEntityResources(entity, resources);
-        this.setEntityTags(entity, metadata);
+        this.setEntityResources(resources, entity::setConfigs, entity::setDependencies, entity::setSetupFile);
+        this.setEntityTags(metadata.getTags(), entity::setTags);
         this.setEntityApplicationMetadata(entity, metadata);
     }
 
@@ -478,29 +473,6 @@ public class JpaApplicationPersistenceServiceImpl extends JpaBaseService impleme
         entity.setStatus(metadata.getStatus());
         entity.setType(metadata.getType().orElse(null));
         EntityDtoConverters.setJsonField(metadata.getMetadata().orElse(null), entity::setMetadata);
-    }
-
-    private void setEntityResources(
-        final ApplicationEntity entity,
-        final ExecutionEnvironment resources
-    ) throws GenieException {
-        // Save all the unowned entities first to avoid unintended flushes
-        final Set<FileEntity> configs = this.createAndGetFileEntities(resources.getConfigs());
-        final Set<FileEntity> dependencies = this.createAndGetFileEntities(resources.getDependencies());
-        final FileEntity setupFile = resources.getSetupFile().isPresent()
-            ? this.createAndGetFileEntity(resources.getSetupFile().get())
-            : null;
-
-        entity.setConfigs(configs);
-        entity.setDependencies(dependencies);
-        entity.setSetupFile(setupFile);
-    }
-
-    private void setEntityTags(
-        final ApplicationEntity entity,
-        final ApplicationMetadata metadata
-    ) throws GenieException {
-        entity.setTags(this.createAndGetTagEntities(metadata.getTags()));
     }
 
     private void checkCommands(final ApplicationEntity applicationEntity) throws GeniePreconditionException {
